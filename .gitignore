@@ -1,0 +1,15 @@
+data/
+checkpoints/
+*.jpeg
+*.log
+pycache/
+*.pth
+venv/
+*.h5
+frontend/build/
+backend/migrations/
+backend/__pycache__/
+backend/*.pyc
+backend/*.sqlite3
+
+
