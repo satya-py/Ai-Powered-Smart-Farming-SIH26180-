@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     pest_high_pressure_threshold: int = 10
     pest_mod_pressure_threshold: int = 4
     disease_conf_threshold: float = 0.70
+    target_soil_moisture: float = 45.0
+    waterlogging_soil_moisture_threshold: float = 75.0
+
+    # ── Weather (OpenWeatherMap) ─────────────────────────────────────
+    # Leave WEATHER_API_KEY empty to run on simulated weather data.
+    weather_api_key: str = ""
+    weather_lat: float = 18.5204   # Pune, Maharashtra
+    weather_lon: float = 73.8567
+    weather_location: str = "Pune, Maharashtra"
 
     @field_validator("disease_model_ckpt", "classes_json", mode="before")
     @classmethod

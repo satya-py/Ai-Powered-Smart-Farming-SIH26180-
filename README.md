@@ -53,7 +53,7 @@
 - [🧪 Testing](#-testing)
 - [▶️ Installation](#️-installation)
 - [🚀 Running the Project](#-running-the-project)
-- [🔗 Planned API Endpoints](#-planned-api-endpoints)
+- [🔗 API Endpoints](#-api-endpoints)
 - [🗺️ Development Roadmap](#️-development-roadmap)
 - [⚠️ Current Limitations](#️-current-limitations)
 - [🔐 Responsible AI & Agricultural Safety](#-responsible-ai--agricultural-safety)
@@ -1353,6 +1353,56 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+`requirements.txt` pins the full ML/data stack plus the backend service
+dependencies (FastAPI, Uvicorn, SQLAlchemy, Ultralytics, Hugging Face Hub).
+
+---
+
+## 4. Configure Environment
+
+```bash
+cp .env.example .env
+```
+
+The defaults work out of the box. Two settings are worth knowing about:
+
+| Variable              | Purpose                                                     |
+| --------------------- | ----------------------------------------------------------- |
+| `DISEASE_MODEL_CKPT`  | Path to the POWER-ProtoPNet checkpoint (`.pth`)              |
+| `WEATHER_API_KEY`     | OpenWeatherMap key — **optional**, see below                 |
+
+### Weather data (optional)
+
+Weather endpoints work without any configuration by serving **simulated**
+data, so the dashboard is fully usable offline. To switch to live weather,
+get a free key from [openweathermap.org/api](https://openweathermap.org/api)
+and set it in `.env`:
+
+```bash
+WEATHER_API_KEY=your_key_here
+WEATHER_LAT=18.5204
+WEATHER_LON=73.8567
+WEATHER_LOCATION=Pune, Maharashtra
+```
+
+Responses carry a `source` field (`"mock"` or `"openweathermap"`) so the UI
+labels simulated readings honestly. If a live call fails, the service falls
+back to simulated data rather than erroring.
+
+---
+
+## 5. Model Assets
+
+| Model                       | Source                                              |
+| --------------------------- | --------------------------------------------------- |
+| Disease (POWER-ProtoPNet)   | Local checkpoint at `DISEASE_MODEL_CKPT`             |
+| Pests (YOLO11)              | Downloaded from Hugging Face on first use            |
+| NPK needs / Fertilizer      | Hugging Face, with a rule-based fallback built in    |
+
+The disease checkpoint is **not** in the repository (`.gitignore` excludes
+`checkpoints/` and `*.pth`). Without it the API stays up and returns a clear
+`503` from `/api/disease/detect`; every other feature keeps working.
+
 ---
 
 # 🚀 Running the Project
@@ -1363,9 +1413,13 @@ pip install -r requirements.txt
 uvicorn backend.main:app --reload
 ```
 
+The database schema is created and seeded automatically on startup (a demo
+farm, one field, and the fertilizer catalog).
+
 ## Start Frontend
 
 ```bash
+cd frontend
 npm install
 npm run dev
 ```
@@ -1382,26 +1436,65 @@ Typical local endpoints:
 
 ---
 
-# 🔗 Planned API Endpoints
+# 🔗 API Endpoints
 
-| Method | Endpoint                    | Purpose                            |
-| ------ | --------------------------- | ---------------------------------- |
-| `GET`  | `/api/health`               | System health                      |
-| `POST` | `/api/disease/detect`       | Disease detection                  |
-| `POST` | `/api/pests/detect`         | Pest detection                     |
-| `POST` | `/api/detect/image`         | Combined image analysis            |
-| `GET`  | `/api/sensors/latest`       | Latest sensor values               |
-| `GET`  | `/api/sensors/history`      | Historical sensor data             |
-| `GET`  | `/api/nutrients/latest`     | Latest nutrient status             |
-| `POST` | `/api/nutrients/analyze`    | Analyze nutrient condition         |
-| `POST` | `/api/fertilizer/recommend` | Generate fertilizer recommendation |
-| `GET`  | `/api/fertilizer/catalog`   | Fertilizer catalog                 |
-| `GET`  | `/api/monitoring/latest`    | Latest monitoring observation      |
-| `GET`  | `/api/monitoring/history`   | Historical monitoring data         |
-| `GET`  | `/api/risk/current`         | Current agricultural risk          |
-| `GET`  | `/api/advisories`           | Farmer advisories                  |
-| `GET`  | `/api/alerts`               | Active alerts                      |
-| `GET`  | `/api/models/status`        | AI model status                    |
+All routes are served under `http://localhost:8000`; interactive docs live at
+`/docs`.
+
+### Health & models
+
+| Method | Endpoint             | Purpose                              |
+| ------ | -------------------- | ------------------------------------ |
+| `GET`  | `/api/health`        | Service, model, and database status  |
+| `GET`  | `/api/models/status` | Hugging Face model load status       |
+
+### Detection
+
+| Method | Endpoint                            | Purpose                                        |
+| ------ | ----------------------------------- | ---------------------------------------------- |
+| `POST` | `/api/disease/detect`               | Disease detection from a leaf image            |
+| `POST` | `/api/pests/detect?annotated=true`  | Pest detection; optional annotated image       |
+| `POST` | `/api/detect/image?field_id=1`      | Combined analysis; persists when `field_id` set |
+
+### Dashboard & fields
+
+| Method   | Endpoint                           | Purpose                          |
+| -------- | ---------------------------------- | -------------------------------- |
+| `GET`    | `/api/overview`                    | Farm summary for the dashboard   |
+| `GET`    | `/api/overview/recent-detections`  | Recent disease and pest findings |
+| `GET`    | `/api/fields`                      | List fields with current state   |
+| `POST`   | `/api/fields`                      | Create a field                   |
+| `PATCH`  | `/api/fields/{id}`                 | Rename a field or change crop    |
+| `DELETE` | `/api/fields/{id}`                 | Delete a field and its history   |
+
+### Sensors & monitoring
+
+| Method | Endpoint                              | Purpose                                |
+| ------ | ------------------------------------- | -------------------------------------- |
+| `GET`  | `/api/sensors/current`                | Live sensor snapshot                   |
+| `GET`  | `/api/monitoring/latest/{field_id}`   | Latest stored observation              |
+| `GET`  | `/api/monitoring/history/{field_id}`  | Observation history (`?days=`)         |
+| `POST` | `/api/monitoring/simulate/{field_id}` | One monitoring tick — reads, scores, saves |
+
+### Analysis & advisory
+
+| Method | Endpoint                                | Purpose                                |
+| ------ | --------------------------------------- | -------------------------------------- |
+| `GET`  | `/api/risk/{field_id}`                  | Risk breakdown and factor scores       |
+| `GET`  | `/api/alerts/{field_id}`                | Prioritised alerts                     |
+| `GET`  | `/api/irrigation/{field_id}`            | Irrigation advice with rain forecast   |
+| `GET`  | `/api/reports/{field_id}`               | Period summary (`?days=`)              |
+| `GET`  | `/api/nutrients/latest/{field_id}`      | Nutrient status and NPK need           |
+| `POST` | `/api/fertilizer/recommend/{field_id}`  | Recommendation from stored soil data   |
+| `POST` | `/api/fertilizer/recommend-manual`      | Recommendation from manual input       |
+| `GET`  | `/api/fertilizer/catalog`               | Fertilizer catalog                     |
+
+### Weather
+
+| Method | Endpoint                 | Purpose                              |
+| ------ | ------------------------ | ------------------------------------ |
+| `GET`  | `/api/weather/current`   | Current conditions (live or mock)    |
+| `GET`  | `/api/weather/forecast`  | Short forecast (`?days=`, max 5)     |
 
 ---
 

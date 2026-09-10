@@ -1,6 +1,12 @@
+# Backend service dependencies (install alongside the root requirements.txt,
+# which pins the ML/data stack: torch, torchvision, numpy, opencv-python, ...)
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 pydantic-settings>=2.6.0
 python-multipart>=0.0.12
-pytest>=8.3.0
+SQLAlchemy>=2.0.36
 httpx>=0.28.0
+ultralytics>=8.3.0
+huggingface_hub>=0.26.0
+joblib>=1.4.0
+pytest>=8.3.0

@@ -1,111 +1,197 @@
-import React, { useState } from 'react';
-import { UploadCloud, Bug } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertCircle, Bug, Loader2, ScanLine, Sigma } from 'lucide-react';
+
+import { api } from '../api';
+import { PageHead } from '../components/Layout';
+import {
+  Card,
+  FlushCard,
+  ImageUpload,
+  Meter,
+  StatCard,
+  num,
+  prettyLabel,
+} from '../components/ui';
 
 export default function PestDetection() {
   const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
   const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
 
-  const handleFileChange = (e) => {
-    const selected = e.target.files[0];
-    if (selected) {
-      setFile(selected);
-      setPreview(URL.createObjectURL(selected));
-      setResult(null);
+  useEffect(() => {
+    if (!file) {
+      setPreviewUrl(null);
+      return undefined;
     }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const handleSelect = (picked) => {
+    setFile(picked);
+    setResult(null);
+    setError(null);
   };
 
-  const handleUpload = async () => {
+  const analyze = async () => {
     if (!file) return;
-    setLoading(true);
-    
-    const formData = new FormData();
-    formData.append("file", file);
-    
+    setBusy(true);
+    setError(null);
     try {
-      const response = await fetch('http://localhost:8000/api/pests/detect', {
-        method: 'POST',
-        body: formData,
-      });
-      
-      if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      setResult(data);
+      setResult(await api.detectPests(file));
     } catch (err) {
-      console.error(err);
-      alert("Failed to detect pests. Make sure the backend server is running on port 8000.");
+      setError(err.message);
+      setResult(null);
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   };
+
+  /** Group detections by species with a mean confidence. */
+  const species = useMemo(() => {
+    if (!result) return [];
+    const grouped = new Map();
+    for (const pest of result.pests) {
+      const entry = grouped.get(pest.name) || { name: pest.name, count: 0, total: 0 };
+      entry.count += 1;
+      entry.total += pest.confidence;
+      grouped.set(pest.name, entry);
+    }
+    return [...grouped.values()]
+      .map((e) => ({ ...e, confidence: e.total / e.count }))
+      .sort((a, b) => b.count - a.count);
+  }, [result]);
 
   return (
-    <div>
-      <div className="page-header">
-        <h1>Pest Detection</h1>
-        <p>Upload an image to run the YOLO11 multi-object pest detector.</p>
-      </div>
+    <div className="stack">
+      <PageHead
+        icon={<Bug size={20} />}
+        title="Pest Detection"
+        subtitle="Upload a field image to detect and count pests"
+      />
 
-      <div className="grid">
-        <div className="card" style={{ gridColumn: 'span 6' }}>
-          <h2><UploadCloud size={20} /> Upload Image</h2>
-          <div className={`upload-container ${file ? 'active' : ''}`}>
-            <input type="file" accept="image/*" onChange={handleFileChange} id="pest-upload" style={{display: 'none'}} />
-            <label htmlFor="pest-upload" style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
-              <UploadCloud size={48} color={file ? '#4ade80' : '#ccc'} />
-              <span style={{fontSize: '1.2rem', color: '#555'}}>{file ? file.name : "Click to select a field image"}</span>
-            </label>
-            {preview && <img src={preview} alt="Preview" className="preview-image" />}
-            <button className="upload-btn" onClick={handleUpload} disabled={!file || loading}>
-              {loading ? "Scanning..." : "Detect Pests"}
-            </button>
-          </div>
-        </div>
+      <div className="grid split-even">
+        <Card title="Upload Field Image" icon={<ScanLine size={16} />}>
+          <ImageUpload
+            file={file}
+            previewUrl={previewUrl}
+            onSelect={handleSelect}
+            disabled={busy}
+            hint="A wide shot of the leaf surface or trap works best for counting"
+          />
 
-        <div className="card" style={{ gridColumn: 'span 6' }}>
-          <h2><Bug size={20} /> Detection Result</h2>
-          {loading ? (
-            <div className="loading-spinner"></div>
-          ) : result ? (
-            <div className="result-card">
-              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px'}}>
-                <span style={{fontSize: '1.2rem', fontWeight: 'bold'}}>Pest Pressure:</span>
-                <div className={`badge ${result.pest_pressure === 'HIGH' ? 'critical' : result.pest_pressure === 'MODERATE' ? 'moderate' : 'normal'}`}>
-                  {result.pest_pressure}
-                </div>
-              </div>
-              
-              <div style={{marginBottom: '15px'}}>
-                <div style={{color: '#666', fontSize: '0.9rem'}}>Total Insects Detected</div>
-                <div style={{fontSize: '2rem', fontWeight: 'bold'}}>{result.total_pests}</div>
-              </div>
-              
-              <div style={{marginBottom: '15px'}}>
-                <div style={{color: '#666', fontSize: '0.9rem', marginBottom: '8px'}}>Counts by Type</div>
-                <ul style={{ background: '#fff', borderRadius: '8px', padding: '15px 30px', border: '1px solid #e2e8f0' }}>
-                  {Object.entries(result.pest_counts).map(([name, count]) => (
-                    <li key={name} style={{fontSize: '1.1rem', marginBottom: '8px'}}>
-                      {name}: <strong>{count}</strong>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              
-              <div style={{marginTop: '30px', paddingTop: '15px', borderTop: '1px solid #e2e8f0', color: '#666', fontSize: '0.9rem'}}>
-                Inference Time: {result.inference_ms}ms
-              </div>
-            </div>
-          ) : (
-            <div style={{ textAlign: 'center', color: '#999', padding: '40px 0' }}>
-              Upload an image to identify pests.
+          <button
+            className="btn btn-primary block"
+            style={{ marginTop: 14 }}
+            disabled={!file || busy}
+            onClick={analyze}
+          >
+            {busy ? <Loader2 size={15} className="spin" /> : <ScanLine size={15} />}
+            {busy ? 'Detecting…' : 'Detect Pests'}
+          </button>
+
+          {error && (
+            <div className="callout danger" style={{ marginTop: 12 }}>
+              <AlertCircle size={15} />
+              <span>{error}</span>
             </div>
           )}
-        </div>
+        </Card>
+
+        <Card title="Detection Results" icon={<Bug size={16} />}>
+          {!result && !busy && (
+            <div className="state">
+              <Bug size={24} />
+              <div className="state-title">No analysis yet</div>
+              <span>Upload a field image and run detection to see pest counts.</span>
+            </div>
+          )}
+
+          {busy && (
+            <div className="state">
+              <Loader2 size={22} className="spin" />
+              <span>Running the YOLO11 pest model…</span>
+            </div>
+          )}
+
+          {result && (
+            <div className="stack" style={{ gap: 12 }}>
+              {result.annotated_image ? (
+                <img
+                  src={result.annotated_image}
+                  alt="Detected pests with bounding boxes"
+                  className="preview-img"
+                />
+              ) : (
+                previewUrl && <img src={previewUrl} alt="Analyzed field" className="preview-img" />
+              )}
+
+              <div className="grid cols-2">
+                <StatCard
+                  icon={<Sigma size={18} />}
+                  label="Total Pests"
+                  value={result.total_pests}
+                  tone={result.total_pests > 0 ? 'amber' : 'green'}
+                />
+                <StatCard
+                  icon={<AlertCircle size={18} />}
+                  label="Pest Pressure"
+                  value={result.pest_pressure}
+                  tone={
+                    result.pest_pressure === 'HIGH'
+                      ? 'red'
+                      : result.pest_pressure === 'MODERATE'
+                        ? 'amber'
+                        : 'green'
+                  }
+                />
+              </div>
+
+              <div className="small muted">
+                Inference time: {num(result.inference_ms, 0, ' ms')}
+              </div>
+            </div>
+          )}
+        </Card>
       </div>
+
+      {result && (
+        <FlushCard title="Detected Pests" icon={<Bug size={16} />}>
+          {species.length === 0 ? (
+            <div className="state">
+              <div className="state-title">No pests detected</div>
+              <span>The model found nothing above the confidence threshold in this image.</span>
+            </div>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Pest Name</th>
+                  <th style={{ width: 90 }}>Count</th>
+                  <th style={{ width: 200 }}>Avg. Confidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {species.map((item) => (
+                  <tr key={item.name}>
+                    <td className="strong">{prettyLabel(item.name)}</td>
+                    <td>{item.count}</td>
+                    <td>
+                      <div className="row">
+                        <Meter value={item.confidence * 100} tone="" />
+                        <span className="small muted">{num(item.confidence, 2)}</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </FlushCard>
+      )}
     </div>
   );
 }

@@ -1,192 +1,375 @@
 import React, { useState } from 'react';
-import { Settings2, Sprout, AlertTriangle, CheckCircle } from 'lucide-react';
+import {
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  CloudSun,
+  FlaskConical,
+  Loader2,
+  Package,
+  RotateCcw,
+  Settings2,
+} from 'lucide-react';
+
+import { api } from '../api';
+import { useApi } from '../hooks';
+import { PageHead } from '../components/Layout';
+import { Badge, Card, EmptyState, FlushCard, Meter, num } from '../components/ui';
+
+const CROPS = ['Tomato', 'Potato', 'Corn', 'Wheat', 'Rice', 'Cotton', 'Pepper', 'Grape'];
+
+/** Inputs the model reads, grouped so the form reads like a soil test report. */
+const SOIL_FIELDS = [
+  { key: 'nitrogen', label: 'Nitrogen (N)', unit: 'mg/kg', step: 1, min: 0, max: 1000 },
+  { key: 'phosphorus', label: 'Phosphorus (P)', unit: 'mg/kg', step: 1, min: 0, max: 1000 },
+  { key: 'potassium', label: 'Potassium (K)', unit: 'mg/kg', step: 1, min: 0, max: 1000 },
+  { key: 'ph', label: 'Soil pH', unit: '', step: 0.1, min: 0, max: 14 },
+];
+
+const CONDITION_FIELDS = [
+  { key: 'soil_moisture', label: 'Soil Moisture', unit: '%', step: 1, min: 0, max: 100 },
+  { key: 'temperature', label: 'Temperature', unit: '°C', step: 0.5, min: -20, max: 60 },
+  { key: 'rainfall', label: 'Rainfall', unit: 'mm', step: 0.5, min: 0, max: 500 },
+  { key: 'field_size', label: 'Field Size', unit: 'acres', step: 0.1, min: 0.1, max: 10000 },
+];
+
+const ALL_FIELDS = [...SOIL_FIELDS, ...CONDITION_FIELDS];
+
+const INITIAL = {
+  crop: 'Tomato',
+  nitrogen: 35,
+  phosphorus: 48,
+  potassium: 28,
+  ph: 6.5,
+  soil_moisture: 40,
+  temperature: 25,
+  rainfall: 0,
+  field_size: 1,
+};
+
+const MAX_BY_NUTRIENT = { nitrogen: 150, phosphorus: 100, potassium: 200, ph: 14 };
+
+const STATUS_ICON = {
+  DEFICIENT: AlertTriangle,
+  LOW: AlertTriangle,
+  HIGH: AlertCircle,
+  ADEQUATE: CheckCircle2,
+};
+
+/** One nutrient's verdict: measured value, status, and how much is short. */
+function NutrientVerdict({ nutrient }) {
+  const base = String(nutrient.status).split(' ')[0];
+  const Icon = STATUS_ICON[base] || AlertCircle;
+  const tone = nutrient.deficient ? (base === 'DEFICIENT' ? 'red' : 'amber') : 'green';
+
+  return (
+    <div className="row-item" style={{ border: '1px solid var(--border)', borderRadius: 10 }}>
+      <div className={`row-icon ${tone === 'green' ? '' : tone}`}>
+        <Icon size={15} />
+      </div>
+
+      <div className="grow">
+        <div className="row-title">{nutrient.label}</div>
+        <div className="row-sub">
+          Measured {num(nutrient.measured, 1)} {nutrient.unit}
+          {/* Only a deficient reading is "short"; an adequate one just gets a top-up. */}
+          {nutrient.need_per_acre > 0 &&
+            (nutrient.deficient
+              ? ` · short by ${num(nutrient.need_per_acre, 1)} kg/acre`
+              : ` · optional top-up ${num(nutrient.need_per_acre, 1)} kg/acre`)}
+        </div>
+        {nutrient.symbol !== 'pH' && (
+          <div style={{ marginTop: 5, maxWidth: 220 }}>
+            <Meter
+              value={nutrient.measured}
+              max={MAX_BY_NUTRIENT[nutrient.label.toLowerCase()] || 150}
+              tone={nutrient.deficient ? 'red' : ''}
+            />
+          </div>
+        )}
+      </div>
+
+      <Badge level={nutrient.status}>{nutrient.status}</Badge>
+    </div>
+  );
+}
 
 export default function ManualNutrientInput() {
-  const [formData, setFormData] = useState({
-    crop: 'Tomato',
-    nitrogen: 30,
-    phosphorus: 30,
-    potassium: 30,
-    ph: 6.5,
-    soil_moisture: 40,
-    temperature: 25,
-    rainfall: 0
-  });
-
-  const [loading, setLoading] = useState(false);
+  const [form, setForm] = useState(INITIAL);
   const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
 
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: name === 'crop' ? value : Number(value)
-    }));
+  const models = useApi(() => api.modelStatus(), []);
+
+  const setField = (key) => (event) =>
+    setForm((prev) => ({ ...prev, [key]: event.target.value }));
+
+  const reset = () => {
+    setForm(INITIAL);
+    setResult(null);
+    setError(null);
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
+  const submit = async (event) => {
+    event.preventDefault();
+
+    // Reject blanks and out-of-range values before hitting the API.
+    for (const { key, label, min, max } of ALL_FIELDS) {
+      const value = Number(form[key]);
+      if (form[key] === '' || Number.isNaN(value)) {
+        setError(`Enter a value for ${label}.`);
+        return;
+      }
+      if (value < min || value > max) {
+        setError(`${label} must be between ${min} and ${max}.`);
+        return;
+      }
+    }
+
+    setBusy(true);
+    setError(null);
     try {
-      const response = await fetch('http://localhost:8000/api/fertilizer/recommend-manual', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
-      });
-      const data = await response.json();
-      setResult(data);
+      const payload = { crop: form.crop };
+      for (const { key } of ALL_FIELDS) payload[key] = Number(form[key]);
+      setResult(await api.recommendManual(payload));
     } catch (err) {
-      console.error(err);
-      alert("Failed to reach the backend model. Is the server running?");
+      setError(err.message);
+      setResult(null);
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   };
 
-  return (
-    <div>
-      <div className="page-header">
-        <h1>Manual Model Input</h1>
-        <p>Directly test the AI models by inputting soil and weather values manually.</p>
-      </div>
+  const nutrientList = result
+    ? ['nitrogen', 'phosphorus', 'potassium', 'ph']
+        .map((key) => result.nutrients?.[key])
+        .filter(Boolean)
+    : [];
 
-      <div className="grid">
-        {/* Input Form */}
-        <div className="card" style={{ gridColumn: 'span 5' }}>
-          <h2><Settings2 size={20} /> Input Parameters</h2>
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginTop: '20px' }}>
-            <div>
-              <label style={{display: 'block', marginBottom: '5px', fontWeight: 'bold'}}>Crop Type</label>
-              <select name="crop" value={formData.crop} onChange={handleChange} style={{width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ccc'}}>
-                <option value="Tomato">Tomato</option>
-                <option value="Potato">Potato</option>
-                <option value="Corn">Corn</option>
-                <option value="Wheat">Wheat</option>
+  return (
+    <div className="stack">
+      <PageHead
+        icon={<Settings2 size={20} />}
+        title="Manual Soil Input"
+        subtitle="Enter your N, P, K and soil readings — the model reports which nutrients are deficient"
+        actions={
+          <button className="btn btn-outline sm" onClick={reset} disabled={busy}>
+            <RotateCcw size={13} /> Reset
+          </button>
+        }
+      />
+
+      <div className="grid split-even">
+        <Card title="Soil Test Readings" icon={<FlaskConical size={16} />}>
+          <form className="stack" style={{ gap: 14 }} onSubmit={submit}>
+            <div className="field">
+              <label htmlFor="manual-crop">Crop</label>
+              <select id="manual-crop" value={form.crop} onChange={setField('crop')}>
+                {CROPS.map((crop) => (
+                  <option key={crop}>{crop}</option>
+                ))}
               </select>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-              <div>
-                <label style={{display: 'block', marginBottom: '5px', fontWeight: 'bold'}}>Nitrogen</label>
-                <input type="number" name="nitrogen" value={formData.nitrogen} onChange={handleChange} style={{width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ccc'}} />
-              </div>
-              <div>
-                <label style={{display: 'block', marginBottom: '5px', fontWeight: 'bold'}}>Phosphorus</label>
-                <input type="number" name="phosphorus" value={formData.phosphorus} onChange={handleChange} style={{width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ccc'}} />
-              </div>
-              <div>
-                <label style={{display: 'block', marginBottom: '5px', fontWeight: 'bold'}}>Potassium</label>
-                <input type="number" name="potassium" value={formData.potassium} onChange={handleChange} style={{width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ccc'}} />
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <div>
-                <label style={{display: 'block', marginBottom: '5px', fontWeight: 'bold'}}>Soil pH</label>
-                <input type="number" step="0.1" name="ph" value={formData.ph} onChange={handleChange} style={{width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ccc'}} />
-              </div>
-              <div>
-                <label style={{display: 'block', marginBottom: '5px', fontWeight: 'bold'}}>Soil Moisture (%)</label>
-                <input type="number" name="soil_moisture" value={formData.soil_moisture} onChange={handleChange} style={{width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ccc'}} />
-              </div>
-              <div>
-                <label style={{display: 'block', marginBottom: '5px', fontWeight: 'bold'}}>Temperature (°C)</label>
-                <input type="number" name="temperature" value={formData.temperature} onChange={handleChange} style={{width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ccc'}} />
-              </div>
-              <div>
-                <label style={{display: 'block', marginBottom: '5px', fontWeight: 'bold'}}>Rainfall (mm)</label>
-                <input type="number" name="rainfall" value={formData.rainfall} onChange={handleChange} style={{width: '100%', padding: '10px', borderRadius: '5px', border: '1px solid #ccc'}} />
-              </div>
-            </div>
-            
-            <button type="submit" disabled={loading} style={{
-              marginTop: '10px', padding: '15px', background: '#1a4331', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1.1rem'
-            }}>
-              {loading ? 'Running AI Models...' : 'Analyze & Recommend'}
-            </button>
-          </form>
-        </div>
 
-        {/* Results */}
-        <div style={{ gridColumn: 'span 7' }}>
-          {!result && !loading && (
-            <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#94a3b8' }}>
-              <p>Enter parameters and submit to see model output.</p>
-            </div>
-          )}
-
-          {loading && (
-            <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-              <div className="loading-spinner"></div>
-            </div>
-          )}
-
-          {result && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              {/* Nutrient Deficiencies */}
-              <div className="card" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <div>
-                  <div style={{color: '#666', fontWeight: 'bold'}}>Nitrogen Status</div>
-                  <div style={{fontSize: '1.2rem', color: result.nutrients_status.nitrogen.includes('LOW') ? '#dc2626' : '#16a34a'}}>{result.nutrients_status.nitrogen}</div>
-                </div>
-                <div>
-                  <div style={{color: '#666', fontWeight: 'bold'}}>Phosphorus Status</div>
-                  <div style={{fontSize: '1.2rem', color: result.nutrients_status.phosphorus.includes('LOW') ? '#dc2626' : '#16a34a'}}>{result.nutrients_status.phosphorus}</div>
-                </div>
-                <div>
-                  <div style={{color: '#666', fontWeight: 'bold'}}>Potassium Status</div>
-                  <div style={{fontSize: '1.2rem', color: result.nutrients_status.potassium.includes('LOW') ? '#dc2626' : '#16a34a'}}>{result.nutrients_status.potassium}</div>
-                </div>
+            <div>
+              <div className="small muted strong" style={{ marginBottom: 8 }}>
+                Nutrients
               </div>
-
-              {/* NPK Model Output */}
-              <div className="card">
-                <h2><Sprout size={20} /> Model Estimated Requirement</h2>
-                <div style={{ display: 'flex', justifyContent: 'space-around', marginTop: '15px' }}>
-                  <div style={{textAlign: 'center'}}>
-                    <div style={{color: '#64748b'}}>N Need</div>
-                    <div style={{fontSize: '2rem', fontWeight: 'bold', color: '#1a4331'}}>{result.npk_need.nitrogen_need}</div>
-                  </div>
-                  <div style={{textAlign: 'center'}}>
-                    <div style={{color: '#64748b'}}>P Need</div>
-                    <div style={{fontSize: '2rem', fontWeight: 'bold', color: '#1a4331'}}>{result.npk_need.phosphorus_need}</div>
-                  </div>
-                  <div style={{textAlign: 'center'}}>
-                    <div style={{color: '#64748b'}}>K Need</div>
-                    <div style={{fontSize: '2rem', fontWeight: 'bold', color: '#1a4331'}}>{result.npk_need.potassium_need}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Weather Status */}
-              <div style={{ 
-                background: result.weather_status.includes('WAIT') || result.weather_status.includes('CAUTION') || result.weather_status.includes('IRRIGATE') ? '#fef2f2' : '#f0fdf4', 
-                border: result.weather_status.includes('WAIT') || result.weather_status.includes('CAUTION') || result.weather_status.includes('IRRIGATE') ? '1px solid #fecaca' : '1px solid #bbf7d0', 
-                padding: '15px 20px', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '15px', 
-                color: result.weather_status.includes('WAIT') || result.weather_status.includes('CAUTION') || result.weather_status.includes('IRRIGATE') ? '#dc2626' : '#16a34a' 
-              }}>
-                {result.weather_status.includes('GOOD') ? <CheckCircle size={24} /> : <AlertTriangle size={24} />}
-                <div>
-                  <h3 style={{margin: '0 0 5px 0', fontSize: '1.1rem'}}>Application Condition</h3>
-                  <p style={{margin: 0}}>{result.weather_status}</p>
-                </div>
-              </div>
-
-              {/* Fertilizer Rankings */}
-              <div className="card">
-                <h2>Recommended Fertilizers</h2>
-                {result.recommendations.map((rec, i) => (
-                  <div key={i} style={{ padding: '15px', borderBottom: i !== result.recommendations.length - 1 ? '1px solid #eee' : 'none' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{fontWeight: 'bold', fontSize: '1.2rem', color: '#1a4331'}}>{rec.name}</div>
-                      <div style={{fontWeight: 'bold', color: i === 0 ? '#16a34a' : '#94a3b8'}}>{rec.match_score.toFixed(0)}% Match</div>
-                    </div>
-                    <div style={{color: '#666', marginTop: '5px'}}>{rec.reason}</div>
+              <div className="grid cols-2" style={{ gap: 12 }}>
+                {SOIL_FIELDS.map(({ key, label, unit, step, min, max }) => (
+                  <div className="field" key={key}>
+                    <label htmlFor={`manual-${key}`}>
+                      {label} {unit && <span className="faint">({unit})</span>}
+                    </label>
+                    <input
+                      id={`manual-${key}`}
+                      type="number"
+                      step={step}
+                      min={min}
+                      max={max}
+                      value={form[key]}
+                      onChange={setField(key)}
+                    />
                   </div>
                 ))}
               </div>
             </div>
-          )}
+
+            <div>
+              <div className="small muted strong" style={{ marginBottom: 8 }}>
+                Field & Conditions
+              </div>
+              <div className="grid cols-2" style={{ gap: 12 }}>
+                {CONDITION_FIELDS.map(({ key, label, unit, step, min, max }) => (
+                  <div className="field" key={key}>
+                    <label htmlFor={`manual-${key}`}>
+                      {label} {unit && <span className="faint">({unit})</span>}
+                    </label>
+                    <input
+                      id={`manual-${key}`}
+                      type="number"
+                      step={step}
+                      min={min}
+                      max={max}
+                      value={form[key]}
+                      onChange={setField(key)}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button className="btn btn-primary block" type="submit" disabled={busy}>
+              {busy ? <Loader2 size={15} className="spin" /> : <FlaskConical size={15} />}
+              {busy ? 'Analyzing…' : 'Analyze Soil'}
+            </button>
+
+            {error && (
+              <div className="callout danger">
+                <AlertCircle size={15} />
+                <span>{error}</span>
+              </div>
+            )}
+          </form>
+        </Card>
+
+        <div className="stack">
+          <Card title="Deficiency Report" icon={<AlertTriangle size={16} />}>
+            {!result && !busy && (
+              <EmptyState
+                title="No analysis yet"
+                hint="Enter your soil readings and press Analyze Soil."
+              />
+            )}
+
+            {busy && (
+              <div className="state">
+                <Loader2 size={22} className="spin" />
+                <span>Evaluating your soil readings…</span>
+              </div>
+            )}
+
+            {result && (
+              <div className="stack" style={{ gap: 13 }}>
+                <div className={`callout ${result.deficient_count > 0 ? 'warning' : 'success'}`}>
+                  {result.deficient_count > 0 ? (
+                    <AlertTriangle size={15} />
+                  ) : (
+                    <CheckCircle2 size={15} />
+                  )}
+                  <div>
+                    <strong>{result.summary}</strong>
+                    <div style={{ marginTop: 3 }}>
+                      {result.deficient_count > 0
+                        ? `${result.deficient_count} of ${nutrientList.length} readings need attention for ${result.crop}.`
+                        : `All readings look suitable for ${result.crop}.`}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="stack" style={{ gap: 8 }}>
+                  {nutrientList.map((nutrient) => (
+                    <NutrientVerdict key={nutrient.label} nutrient={nutrient} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </Card>
+
+          <Card title="Model Status" icon={<Settings2 size={16} />}>
+            {models.loading && <span className="small muted">Checking models…</span>}
+            {models.error && <span className="small muted">{models.error}</span>}
+            {models.data && (
+              <div className="stack" style={{ gap: 10 }}>
+                {Object.values(models.data).map((info) => {
+                  const loaded = info.status === 'loaded';
+                  return (
+                    <div className="row between" key={info.name} style={{ alignItems: 'flex-start' }}>
+                      <div className="grow">
+                        <div className="small strong">{info.name}</div>
+                        {!loaded && (
+                          <div className="small faint">
+                            Using the built-in rule-based engine instead.
+                          </div>
+                        )}
+                      </div>
+                      <span className={`badge-pill ${loaded ? 'good' : 'moderate'}`}>
+                        {loaded ? 'Loaded' : 'Fallback'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
         </div>
       </div>
+
+      {result && (
+        <div className="grid split-even">
+          <FlushCard title="Nutrient Requirement" icon={<Package size={16} />}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Nutrient</th>
+                  <th>Per acre</th>
+                  <th>Total for {num(result.field_size, 1)} acre(s)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nutrientList
+                  .filter((n) => n.symbol !== 'pH')
+                  .map((nutrient) => (
+                    <tr key={nutrient.label}>
+                      <td className="strong">{nutrient.label}</td>
+                      <td>{num(nutrient.need_per_acre, 1, ' kg')}</td>
+                      <td className="strong">{num(nutrient.total_need, 1, ' kg')}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </FlushCard>
+
+          <Card title="Suggested Fertilizers" icon={<Package size={16} />}>
+            <div className={`callout ${result.weather_status?.startsWith('GOOD') ? 'success' : 'warning'}`}>
+              <CloudSun size={15} />
+              <span>{result.weather_status}</span>
+            </div>
+
+            <div className="stack" style={{ gap: 8, marginTop: 12 }}>
+              {(result.recommendations || []).slice(0, 4).map((rec, index) => (
+                <div
+                  className="row-item"
+                  key={rec.id ?? index}
+                  style={{ border: '1px solid var(--border)', borderRadius: 10 }}
+                >
+                  <div className="row-icon">
+                    <Package size={15} />
+                  </div>
+                  <div className="grow">
+                    <div className="row-title">{rec.name}</div>
+                    <div className="row-sub">{rec.reason}</div>
+                  </div>
+                  <span className="badge-pill neutral">{num(rec.match_score, 0)}% match</span>
+                </div>
+              ))}
+
+              {(result.recommendations || []).length === 0 && (
+                <EmptyState title="No fertilizer matched this soil profile" />
+              )}
+            </div>
+
+            <div className="callout warning" style={{ marginTop: 12 }}>
+              <AlertCircle size={15} />
+              <span>
+                Prototype guidance, not a prescription. Confirm rates with your local
+                agricultural extension officer before applying.
+              </span>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

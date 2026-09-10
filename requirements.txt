@@ -120,3 +120,13 @@ webcolors==25.10.0
 webencodings==0.5.1
 websocket-client==1.9.0
 widgetsnbextension==4.0.15
+
+# ── Backend service (added: these were missing but are imported by backend/) ──
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic-settings>=2.6.0
+python-multipart>=0.0.12
+SQLAlchemy>=2.0.36
+ultralytics>=8.3.0
+huggingface_hub>=0.26.0
+xgboost>=2.0.0

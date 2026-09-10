@@ -36,13 +36,10 @@ class FusionService:
         field_info: Optional[FieldInfo] = None
     ) -> FarmObservationResponse:
         
-        # Default field info if none provided
+        # Default field info if none provided.
+        # DiseaseSummary carries no crop field, so fall back to a neutral label.
         if not field_info:
-            field_info = FieldInfo(
-                id=1,
-                name="Demo Field",
-                crop=disease_summary.crop if disease_summary.detected else "Unknown"
-            )
+            field_info = FieldInfo(id=1, name="Demo Field", crop="Unknown")
 
         # 1. Calculate Risks
         risk_summary = self.risk_service.calculate_risk(
